@@ -23,8 +23,9 @@
         <a href="#home">Tiny Demos</a>
       </h1>
       <nav>
-        <a href="#about">About</a>
+        <!-- <a href="#about">About</a> -->
         <a href="#news">Blog</a>
+        <a href="#til">TIL</a>
         <!-- <a href="#photos">Photos</a> -->
         <!-- <a href="#portfolio">Portfolio</a> -->
       </nav>
@@ -48,17 +49,54 @@
       <section id="news"> <!-- NEWS -->
         <article>
           <h2>Blogging with Joe Bloggs <time datetime="2020-10-10">10.10.2020</time></h2>
-          <p> One <em>could</em> use this setup to write <s>a blog</s> short updates. For images make sure to use the <code>loading="lazy"</code> attribute, so they get loaded only when needed.<label for="lazy">1</label><input type="checkbox" id="lazy"><small>
-            
-            You might be able to use it for <code>iframe</code> embeds too(?), but maybe just write a link to the Youtube video instead.
-            
-           </small></p>
+          <p>One <em>could</em> use this setup to write <s>a blog</s> short updates. For images make sure to use the <code>loading="lazy"</code> attribute, so they get loaded only when needed.<label for="lazy">1</label><input type="checkbox" id="lazy">
+          	<small>You might be able to use it for <code>iframe</code> embeds too(?), but maybe just write a link to the Youtube video instead.</small>
+          </p>
         </article>
               
         <article>
           <h2><a href="https://example.com">Why Your Cat Bites You</a> <time datetime="2004-12-12">12.12.2004</time></h2>
           <p>Honestly you don't want to know.</p>
         </article>
+      </section>
+      
+      <section id="til"> <!-- TIL -->
+      	<article>
+     		<h2>There is a command line utility called <code>gzexe</code> <time datetime="2025-12-10">10 Dec 2025</time></h2>
+			<p>From the <code>gzexe</code> man page:</p>
+			<blockquote>
+				<p>The gzexe utility uses gzip(1) to compress executables, producing executables that decompress on-the-fly when executed. This saves disk space, at the cost of slower execution times. The original executables are saved by copying each of them to a file with the same name with a ‘~’ suffix appended. After verifying that the compressed executables work as expected, the backup files can be removed.</p>
+				</blockquote>
+			<p>I had no idea that there is a tool to compress executables that apparently comes with macOS (and Linux as well as other Unix-based OSes). </p>
+			<p>Sure, the demoscene has their own kind of specialized tools for compressing executables — I heard of <em>(re)kkrunchy</em>, <em>squishy</em>, and <em>Crinkler</em> so far. But these all seem to be specialized on Windows executables and won’t help me with macOS binaries on arm64 which are MachO.</p>
+			<p>The more extensive <a href="https://linuxcommandlibrary.com/man/gzexe">Linux Command Library entry on <code>gzexe</code></a> mentions:</p>
+			<blockquote>
+			<p>Its usage has decreased over time due to increasing disk capacities and the emergence of more specialized executable compressors like UPX.</p>
+			</blockquote>
+			<p>For now gzip-based <code>gzexe</code> seems fine. I should check out UPX as well.</p>
+        </article>
+      
+      	<article>
+			<h2>64K demos can call pretty much any OS-provided API <time datetime="2025-12-09">09 Dec 2025</time></h2>
+			<p>As I was wondering about the rules for 64K demos, I tried to find information about what is officially allowed to be called from the demo executable. Turns out it can call all kinds of APIs, as long as they ship with the operating system.</p>
+			<p>On Windows that often means .NET/DotNet framework and DirectX graphics APIs that ship with Windows are fair game, as it states here in the <a href="https://2025.revision-party.net/competitions/pc/">Revision 2025 PC Competitions rules</a>:</p>
+			<blockquote>
+				<ul>
+					<li>DotNet Entries: DotNet 4.8 that comes with Windows 10 Version 22H2 will be available. We will not install any other versions.
+					[…]</li>
+					<li>The compo machine will be installed with DX12.</li>
+				</ul>
+			</blockquote>
+			<p>So calling into dynamically loaded libs (DLLs) is fine. For my macOS experiments I’ll interpret that as calling into any Apple-provided frameworks that ship with macOS is fine.</p>
+		    <p>What ultimately counts is just the size of the executable.</p>
+        </article>
+
+       	<article>
+      		<h2>Demos for macOS (or iOS) aren’t really a thing <time datetime="2025-12-08">08 Dec 2025</time></h2>
+			<p>Let’s get this out of the way: I’m aware that demos for macOS aren’t really a thing. Why, I don’t know, but probably for similar reasons why games for macOS weren’t really a (big) thing either.</p>
+			<p>The demoscene focuses on all kinds of retro platforms, like C64 or Amiga for instance, which I started my computing “career” on (if you can call it that). Or it happens mainly on Windows, for modern <em>new-school</em> demos, even though the occasional Linux and Mac demo does exist. It appears though that most demos that run on macOS have been ported, or run through cross-platform layers like SDL.</p>
+			<p>Well, I don’t have a Windows computer and don’t know much about DirectX or any other Windows frameworks for that matter. I do know a bit about various macOS/iOS frameworks, and I’m going to put that knowledge to good use, whether it’s a thing or not. And I’m not trying to make it a thing either. I just want to find something that makes coding fun for me again.</p>
+         </article>
       </section>
       
       <section id="photos"> <!-- PHOTOS -->
