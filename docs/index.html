@@ -62,6 +62,35 @@
       
       <section id="til"> <!-- TIL -->
       	<article>
+     		<h2>Swift compiler flags to reduce binary size <time datetime="2025-12-15">15 Dec 2025</time></h2>
+			<p>There are a bunch of compiler flags that help with optimizing the binary to take less space. Here are some of the ones I learned about through Gemini<sup><a href="#fn1-31554" id="fnr1-31554" title="see footnote" class="footnote">1</a></sup>:</p>
+			<ul>
+				<li><code>-Osize</code>: Perhaps the most obvious one. Tells the compiler to prioritize code size over execution speed, which for instance prevents aggressive loop unrolling and inlining, which increases binary size.</li>
+				<li><code>-wmo</code> or <code>-whole-module-optimization</code>: Analyzes a whole module (multiple source files, if I had more than one) to find unused code across file boundaries.</li>
+				<li><code>-Xlinker -dead_strip</code>: Linker flag. Tells the linker to analyze the binary and remove unreachable code and data that is never called or used.</li>
+				<li><code>-Xlinker -x</code>: Linker flag. Strip local symbols to save space in the symbol table.</li>
+			</ul>
+			<p>The following flags Gemini classifies as “nuclear”:</p>
+			<ul>
+				<li><code>-Xfrontend -disable-reflection-metadata</code>: Strip out Swift’s reflection metadata, which means you can no longer inspect types at runtime.</li>
+				<li><code>-Xfrontend -disable-reflection-names</code>: Same with names.</li>
+				<li><code>-Xcc -fno-stack-protector</code>: Disable compiler-synthesized stack safety checks.</li>
+			</ul>
+			<p>I need to review all these and see if there are other interesting ones. But for now this cut the binary size more than in half, so for a quick feasibility study I’ll just go with those for now.</p>
+			<div class="footnotes">
+				<hr />
+				<small>
+					<ol>
+						<li id="fn1-31554">
+							<p>This is just a quick “feasibility study”, so I just go with what Gemini thinks is useful; I will certainly look into all the possible and latest compiler settings when I start working on this more seriously. <a href="#fnr1-31554" title="return to article" class="reversefootnote">&#8617;&#xFE0E;</a></p>
+						</li>
+					</ol>
+				</small>
+			</div>
+
+       </article>
+      
+      	<article>
      		<h2>There is a command line utility called <code>gzexe</code> <time datetime="2025-12-10">10 Dec 2025</time></h2>
 			<p>From the <code>gzexe</code> man page:</p>
 			<blockquote>
