@@ -1,304 +1,156 @@
 import Cocoa
 import MetalKit
-import QuartzCore  // Needed for CACurrentMediaTime() for animation
+import QuartzCore
 
-// --- 1. Shader Source Code (Embedded) ---
-// We embed the shaders as a multi-line string to avoid a separate .metal file.
+// --- 1. Shader Source Code (The Raymarcher) ---
 let SHADER_SOURCE = """
 	#include <metal_stdlib>
 	using namespace metal;
 
-	// Vertex data structure (matches CPU side)
-	struct Vertex {
-	    packed_float3 position;
-	    packed_float4 color;
-	};
-
-	// Uniforms structure for the transformation matrix (matches CPU side)
-	struct Uniforms {
-	    float4x4 modelViewProjectionMatrix;
-	};
-
-	// Output from Vertex Shader to Fragment Shader
-	struct FragmentIn {
+	struct VertexOut {
 	    float4 position [[position]];
-	    float4 color;
+	    float2 uv;
 	};
 
-	// Vertex Shader
-	// Inputs are now passed as parameters with their respective attributes:
-	// 1. vertexID: The index of the current vertex, automatically provided by the GPU.
-	// 2. vertices: The vertex data buffer bound at index 0 on the CPU.
-	// 3. uniforms: The uniforms buffer bound at index 1 on the CPU.
-	vertex FragmentIn vertexShader(
-	    uint vertexID [[vertex_id]],
-	    constant Vertex *vertices [[buffer(0)]],
-	    constant Uniforms &uniforms [[buffer(1)]])
-	{
-	    FragmentIn out;
-	    // We manually fetch the vertex data using the vertexID index
-	    out.position = uniforms.modelViewProjectionMatrix * float4(vertices[vertexID].position, 1.0);
-	    out.color = vertices[vertexID].color;
+	struct Uniforms {
+	    float time;
+	    float2 resolution;
+	};
+
+	// 1. Raymarching Helpers
+	// Rotation matrix for SDF
+	float3 rotateY(float3 p, float a) {
+	    float c = cos(a), s = sin(a);
+	    return float3(p.x * c - p.z * s, p.y, p.x * s + p.z * c);
+	}
+
+	float3 rotateX(float3 p, float a) {
+	    float c = cos(a), s = sin(a);
+	    return float3(p.x, p.y * c - p.z * s, p.y * s + p.z * c);
+	}
+
+	// Signed Distance Function for a Box
+	float sdBox(float3 p, float3 b) {
+	    float3 q = abs(p) - b;
+	    return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
+	}
+
+	// Scene definition
+	float map(float3 p, float time) {
+	    float3 q = rotateY(rotateX(p, time * 0.7), time * 0.5);
+	    return sdBox(q, float3(0.5));
+	}
+
+	// Simple Normal calculation
+	float3 getNormal(float3 p, float time) {
+	    float2 e = float2(0.001, 0);
+	    return normalize(float3(
+	        map(p + e.xyy, time) - map(p - e.xyy, time),
+	        map(p + e.yxy, time) - map(p - e.yxy, time),
+	        map(p + e.yyx, time) - map(p - e.yyx, time)
+	    ));
+	}
+
+	// 2. Vertex Shader: Full-screen triangle trick
+	// vertexID 0,1,2 generates a triangle covering the whole screen
+	vertex VertexOut vertexShader(uint vid [[vertex_id]]) {
+	    VertexOut out;
+	    out.uv = float2((vid << 1) & 2, vid & 2);
+	    out.position = float4(out.uv * 2.0 - 1.0, 0.0, 1.0);
+	    out.uv.y = 1.0 - out.uv.y;
 	    return out;
 	}
 
-	// Fragment Shader
-	fragment float4 fragmentShader(FragmentIn in [[stage_in]])
-	{
-	    return in.color;
+	// 3. Fragment Shader: The Raymarcher
+	fragment float4 fragmentShader(VertexOut in [[stage_in]], constant Uniforms &u [[buffer(0)]]) {
+	    // Standardize coordinates (-1 to 1, corrected for aspect ratio)
+	    float2 p = (in.position.xy * 2.0 - u.resolution) / min(u.resolution.x, u.resolution.y);
+
+	    float3 ro = float3(0, 0, -2);          // Ray Origin (Camera)
+	    float3 rd = normalize(float3(p, 1.5));  // Ray Direction
+
+	    float t = 0.0; // Distance traveled
+	    for(int i = 0; i < 64; i++) {
+	        float d = map(ro + rd * t, u.time);
+	        if(d < 0.001 || t > 10.0) break;
+	        t += d;
+	    }
+
+	    float3 col = float3(0.1, 0.1, 0.15); // Background
+
+	    if(t < 10.0) {
+	        float3 pos = ro + rd * t;
+	        float3 nor = getNormal(pos, u.time);
+	        float diff = max(0.0, dot(nor, normalize(float3(1, 2, -1)))); // Simple lighting
+	        col = nor * 0.5 + 0.5; // Visualizing normals as colors
+	        col *= diff;
+	    }
+
+	    return float4(col, 1.0);
 	}
 	"""
 
-// --- 2. Matrix Math Helpers (Minimal) ---
-// We use simple 4x4 float matrix type to handle transformations.
-typealias float4x4 = simd_float4x4
-typealias float3 = simd_float3
-
-extension float4x4 {
-	// Identity matrix
-	static let identity = matrix_identity_float4x4
-
-	// Simple projection matrix (Perspective)
-	static func perspective(fovyRadians: Float, aspectRatio: Float, nearZ: Float, farZ: Float)
-		-> float4x4
-	{
-		let f = 1.0 / tan(fovyRadians / 2.0)
-		return float4x4(
-			SIMD4<Float>(f / aspectRatio, 0, 0, 0),
-			SIMD4<Float>(0, f, 0, 0),
-			SIMD4<Float>(0, 0, (farZ + nearZ) / (nearZ - farZ), -1),
-			SIMD4<Float>(0, 0, (2 * farZ * nearZ) / (nearZ - farZ), 0)
-		)
-	}
-
-	// Simple rotation matrix around the Y axis
-	static func rotation(angle: Float, axis: float3) -> float4x4 {
-		let c = cos(angle)
-		let s = sin(angle)
-		let C = 1 - c
-
-		let x = axis.x
-		let y = axis.y
-		let z = axis.z
-
-		return float4x4(
-			SIMD4<Float>(x * x * C + c, x * y * C - z * s, x * z * C + y * s, 0),
-			SIMD4<Float>(y * x * C + z * s, y * y * C + c, y * z * C - x * s, 0),
-			SIMD4<Float>(z * x * C - y * s, z * y * C + x * s, z * z * C + c, 0),
-			SIMD4<Float>(0, 0, 0, 1)
-		)
-	}
-
-	// Simple translation matrix
-	static func translation(x: Float, y: Float, z: Float) -> float4x4 {
-		var matrix = float4x4.identity
-		matrix.columns.3 = SIMD4<Float>(x, y, z, 1)
-		return matrix
-	}
-}
-
-// Uniforms structure (must match the struct in the shader)
 struct Uniforms {
-	var modelViewProjectionMatrix: float4x4
+	var time: Float
+	var resolution: SIMD2<Float>
 }
 
-// --- 3. The App Delegate (Now also the Renderer) ---
 class AppDelegate: NSObject, NSApplicationDelegate, MTKViewDelegate {
 	var window: NSWindow!
-
-	// Metal properties
-	let device: MTLDevice
-	let commandQueue: MTLCommandQueue
+	let device = MTLCreateSystemDefaultDevice()!
+	lazy var commandQueue = device.makeCommandQueue()!
 	var pipelineState: MTLRenderPipelineState!
-	var vertexBuffer: MTLBuffer!
-	var indexBuffer: MTLBuffer!
-	var uniformsBuffer: MTLBuffer!
-
-	// Animation properties
-	var startTime: CFTimeInterval = 0
-	var rotationAngle: Float = 0
-	let vertexData: [Float] = [
-		// Position (3 floats), Color (4 floats: R G B A)
-
-		// Front face (Red)
-		-0.5, 0.5, 0.5, 1.0, 0.0, 0.0, 1.0,
-		-0.5, -0.5, 0.5, 1.0, 0.0, 0.0, 1.0,
-		0.5, -0.5, 0.5, 1.0, 0.0, 0.0, 1.0,
-		0.5, 0.5, 0.5, 1.0, 0.0, 0.0, 1.0,
-
-		// Back face (Green)
-		-0.5, 0.5, -0.5, 0.0, 1.0, 0.0, 1.0,
-		-0.5, -0.5, -0.5, 0.0, 1.0, 0.0, 1.0,
-		0.5, -0.5, -0.5, 0.0, 1.0, 0.0, 1.0,
-		0.5, 0.5, -0.5, 0.0, 1.0, 0.0, 1.0,
-	]
-	let indexData: [UInt16] = [
-		// Front
-		0, 1, 2,
-		2, 3, 0,
-
-		// Back
-		4, 6, 5,
-		6, 4, 7,
-
-		// Top
-		3, 7, 4,
-		4, 0, 3,
-
-		// Bottom
-		1, 6, 2,
-		6, 1, 5,
-
-		// Right
-		2, 7, 3,
-		7, 2, 6,
-
-		// Left
-		1, 4, 5,
-		4, 1, 0,
-	]
-
-	override init() {
-		// Force unwrap for minimal code (demoscene trick)
-		self.device = MTLCreateSystemDefaultDevice()!
-		self.commandQueue = self.device.makeCommandQueue()!
-		super.init()
-	}
-
-	func setupMetal(view: MTKView) {
-		view.device = device
-		view.delegate = self
-		view.clearColor = MTLClearColor(red: 0.1, green: 0.1, blue: 0.2, alpha: 1.0)
-
-		// 1. Compile Shaders from Source String
-		do {
-			let library = try device.makeLibrary(source: SHADER_SOURCE, options: nil)
-			let vertexFunction = library.makeFunction(name: "vertexShader")
-			let fragmentFunction = library.makeFunction(name: "fragmentShader")
-
-			// 2. Create Pipeline State
-			let pipelineDescriptor = MTLRenderPipelineDescriptor()
-			pipelineDescriptor.vertexFunction = vertexFunction
-			pipelineDescriptor.fragmentFunction = fragmentFunction
-			pipelineDescriptor.colorAttachments[0].pixelFormat = view.colorPixelFormat
-
-			self.pipelineState = try device.makeRenderPipelineState(descriptor: pipelineDescriptor)
-
-		} catch {
-			print("Failed to set up Metal pipeline: \(error)")
-			return
-		}
-
-		// 3. Create Buffers for Geometry (Vertex and Index)
-		let vertexDataSize = vertexData.count * MemoryLayout<Float>.size
-		self.vertexBuffer = device.makeBuffer(
-			bytes: vertexData, length: vertexDataSize, options: .storageModeShared)
-
-		let indexDataSize = indexData.count * MemoryLayout<UInt16>.size
-		self.indexBuffer = device.makeBuffer(
-			bytes: indexData, length: indexDataSize, options: .storageModeShared)
-
-		// 4. Create Uniforms Buffer (small, frequently updated)
-		let uniformSize = MemoryLayout<Uniforms>.size
-		self.uniformsBuffer = device.makeBuffer(length: uniformSize, options: .storageModeShared)
-	}
+	let startTime = CACurrentMediaTime()
 
 	func applicationDidFinishLaunching(_ notification: Notification) {
-		self.startTime = CACurrentMediaTime()
-		let rect = NSMakeRect(0, 0, 800, 600)
-
-		// Use raw StyleMask integer to avoid Swift Set<t> overhead
-		let style = NSWindow.StyleMask(rawValue: 15)  // Titled | Closable | Miniaturizable | Resizable
-
 		window = NSWindow(
-			contentRect: rect,
-			styleMask: style,
-			backing: .buffered,
-			defer: false)
-
-		window.title = "Spinning Metal Cube"
+			contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+			styleMask: [.titled, .closable, .resizable],
+			backing: .buffered, defer: false)
 		window.center()
+		window.title = "Raymarched Cube"
 
-		let mtkView = MTKView(frame: rect)
-		setupMetal(view: mtkView)
+		let mtkView = MTKView(frame: window.contentView!.frame)
+		mtkView.device = device
+		mtkView.delegate = self
+
+		let library = try! device.makeLibrary(source: SHADER_SOURCE, options: nil)
+		let desc = MTLRenderPipelineDescriptor()
+		desc.vertexFunction = library.makeFunction(name: "vertexShader")
+		desc.fragmentFunction = library.makeFunction(name: "fragmentShader")
+		desc.colorAttachments[0].pixelFormat = mtkView.colorPixelFormat
+		pipelineState = try! device.makeRenderPipelineState(descriptor: desc)
 
 		window.contentView = mtkView
 		window.makeKeyAndOrderFront(nil)
+		NSApp.setActivationPolicy(.regular)
 		NSApp.activate(ignoringOtherApps: true)
 	}
 
-	// --- MTKViewDelegate Methods ---
-
-	func updateUniforms(drawableSize: CGSize) {
-		let currentTime = Float(CACurrentMediaTime() - startTime)
-
-		// Animate the cube rotation over time
-		rotationAngle = currentTime * 0.5  // 0.5 radians per second
-
-		// 1. Create Model (Rotation) Matrix
-		let modelMatrix = float4x4.rotation(angle: rotationAngle, axis: float3(0.5, 1.0, 0.0))
-
-		// 2. Create View (Camera) Matrix
-		let viewMatrix = float4x4.translation(x: 0, y: 0, z: -3.0)  // Pull camera back 3 units
-
-		// 3. Create Projection Matrix
-		let aspect = Float(drawableSize.width / drawableSize.height)
-		let projectionMatrix = float4x4.perspective(
-			fovyRadians: 1.0472, aspectRatio: aspect, nearZ: 0.01, farZ: 100.0)  // FOV 60 degrees
-
-		// 4. Combine them: Projection * View * Model
-		let mvpMatrix = projectionMatrix * viewMatrix * modelMatrix
-
-		// 5. Write the final matrix to the uniforms buffer
-		var uniforms = Uniforms(modelViewProjectionMatrix: mvpMatrix)
-		memcpy(uniformsBuffer.contents(), &uniforms, MemoryLayout<Uniforms>.size)
-	}
-
 	func draw(in view: MTKView) {
-		// Update the transformation matrix on the CPU before sending to GPU
-		updateUniforms(drawableSize: view.drawableSize)
-
-		guard let descriptor = view.currentRenderPassDescriptor,
-			let drawable = view.currentDrawable,
-			let commandBuffer = commandQueue.makeCommandBuffer(),
-			let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor)
+		guard let b = commandQueue.makeCommandBuffer(), let d = view.currentRenderPassDescriptor,
+			let e = b.makeRenderCommandEncoder(descriptor: d)
 		else { return }
 
-		// 1. Set the render state
-		encoder.setRenderPipelineState(pipelineState)
+		var uniforms = Uniforms(
+			time: Float(CACurrentMediaTime() - startTime),
+			resolution: SIMD2<Float>(
+				Float(view.drawableSize.width), Float(view.drawableSize.height)))
 
-		// 2. Set the vertex buffer (at index 0)
-		encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
+		e.setRenderPipelineState(pipelineState)
+		e.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.size, index: 0)
+		e.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)  // One big triangle covering screen
 
-		// 3. Set the uniforms buffer (at index 1)
-		encoder.setVertexBuffer(uniformsBuffer, offset: 0, index: 1)
-
-		// 4. Draw the indexed cube
-		encoder.drawIndexedPrimitives(
-			type: .triangle,
-			indexCount: indexBuffer.length / MemoryLayout<UInt16>.size,
-			indexType: .uint16,
-			indexBuffer: indexBuffer,
-			indexBufferOffset: 0)
-
-		encoder.endEncoding()
-		commandBuffer.present(drawable)
-		commandBuffer.commit()
+		e.endEncoding()
+		b.present(view.currentDrawable!)
+		b.commit()
 	}
 
-	func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
-		// Update projection matrix if the window resizes
-		// (This is implicitly handled in updateUniforms, but you'd put heavy resize logic here)
-	}
-
-	func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-		return true
-	}
+	func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
+	func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 }
 
-// 4. Execution Entry Point
 let app = NSApplication.shared
-app.setActivationPolicy(.regular)
 let delegate = AppDelegate()
 app.delegate = delegate
 app.run()
