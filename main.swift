@@ -1,94 +1,26 @@
 import Cocoa
+//import MachO
 import MetalKit
-import QuartzCore
 
-// --- 1. Shader Source Code (The Raymarcher) ---
-let SHADER_SOURCE = """
-	#include <metal_stdlib>
-	using namespace metal;
-
-	struct VertexOut {
-	    float4 position [[position]];
-	    float2 uv;
-	};
-
-	struct Uniforms {
-	    float time;
-	    float2 resolution;
-	};
-
-	// 1. Raymarching Helpers
-	// Rotation matrix for SDF
-	float3 rotateY(float3 p, float a) {
-	    float c = cos(a), s = sin(a);
-	    return float3(p.x * c - p.z * s, p.y, p.x * s + p.z * c);
+func loadEmbeddedResource(segment: String, section: String) -> Data {
+	guard let header = _dyld_get_image_header(0) else {  // Image 0 is usually the main executable
+		fatalError("Could not get executable header")
 	}
 
-	float3 rotateX(float3 p, float a) {
-	    float c = cos(a), s = sin(a);
-	    return float3(p.x, p.y * c - p.z * s, p.y * s + p.z * c);
+	var size: UInt = 0
+	guard
+		let ptr = getsectiondata(
+			UnsafePointer<mach_header_64>(OpaquePointer(header)),
+			segment,
+			section,
+			&size
+		)
+	else {
+		fatalError("Embedded Metal library section not found")
 	}
 
-	// Signed Distance Function for a Box
-	float sdBox(float3 p, float3 b) {
-	    float3 q = abs(p) - b;
-	    return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
-	}
-
-	// Scene definition
-	float map(float3 p, float time) {
-	    float3 q = rotateY(rotateX(p, time * 0.7), time * 0.5);
-	    return sdBox(q, float3(0.5));
-	}
-
-	// Simple Normal calculation
-	float3 getNormal(float3 p, float time) {
-	    float2 e = float2(0.001, 0);
-	    return normalize(float3(
-	        map(p + e.xyy, time) - map(p - e.xyy, time),
-	        map(p + e.yxy, time) - map(p - e.yxy, time),
-	        map(p + e.yyx, time) - map(p - e.yyx, time)
-	    ));
-	}
-
-	// 2. Vertex Shader: Full-screen triangle trick
-	// vertexID 0,1,2 generates a triangle covering the whole screen
-	vertex VertexOut vertexShader(uint vid [[vertex_id]]) {
-	    VertexOut out;
-	    out.uv = float2((vid << 1) & 2, vid & 2);
-	    out.position = float4(out.uv * 2.0 - 1.0, 0.0, 1.0);
-	    out.uv.y = 1.0 - out.uv.y;
-	    return out;
-	}
-
-	// 3. Fragment Shader: The Raymarcher
-	fragment float4 fragmentShader(VertexOut in [[stage_in]], constant Uniforms &u [[buffer(0)]]) {
-	    // Standardize coordinates (-1 to 1, corrected for aspect ratio)
-	    float2 p = (in.position.xy * 2.0 - u.resolution) / min(u.resolution.x, u.resolution.y);
-
-	    float3 ro = float3(0, 0, -2);          // Ray Origin (Camera)
-	    float3 rd = normalize(float3(p, 1.5));  // Ray Direction
-
-	    float t = 0.0; // Distance traveled
-	    for(int i = 0; i < 64; i++) {
-	        float d = map(ro + rd * t, u.time);
-	        if(d < 0.001 || t > 10.0) break;
-	        t += d;
-	    }
-
-	    float3 col = float3(0.1, 0.1, 0.15); // Background
-
-	    if(t < 10.0) {
-	        float3 pos = ro + rd * t;
-	        float3 nor = getNormal(pos, u.time);
-	        float diff = max(0.0, dot(nor, normalize(float3(1, 2, -1)))); // Simple lighting
-	        col = nor * 0.5 + 0.5; // Visualizing normals as colors
-	        col *= diff;
-	    }
-
-	    return float4(col, 1.0);
-	}
-	"""
+	return Data(bytes: ptr, count: Int(size))
+}
 
 struct Uniforms {
 	var time: Float
@@ -108,18 +40,28 @@ class AppDelegate: NSObject, NSApplicationDelegate, MTKViewDelegate {
 			styleMask: [.titled, .closable, .resizable],
 			backing: .buffered, defer: false)
 		window.center()
-		window.title = "Raymarched Cube"
+		window.title = "Embedded Library Cube"
 
 		let mtkView = MTKView(frame: window.contentView!.frame)
 		mtkView.device = device
 		mtkView.delegate = self
 
-		let library = try! device.makeLibrary(source: SHADER_SOURCE, options: nil)
-		let desc = MTLRenderPipelineDescriptor()
-		desc.vertexFunction = library.makeFunction(name: "vertexShader")
-		desc.fragmentFunction = library.makeFunction(name: "fragmentShader")
-		desc.colorAttachments[0].pixelFormat = mtkView.colorPixelFormat
-		pipelineState = try! device.makeRenderPipelineState(descriptor: desc)
+		// --- LOADING THE EMBEDDED SHADER LIBRARY (Modern API) ---
+		do {
+			let metalLib = loadEmbeddedResource(segment: "__TEXT", section: "__metallib")
+			let dispatchData = metalLib.withUnsafeBytes { unsafeRawBufferPointer in
+				DispatchData(bytes: unsafeRawBufferPointer)
+			}
+			let library = try device.makeLibrary(data: dispatchData)
+
+			let desc = MTLRenderPipelineDescriptor()
+			desc.vertexFunction = library.makeFunction(name: "vertexShader")
+			desc.fragmentFunction = library.makeFunction(name: "fragmentShader")
+			desc.colorAttachments[0].pixelFormat = mtkView.colorPixelFormat
+			pipelineState = try device.makeRenderPipelineState(descriptor: desc)
+		} catch {
+			fatalError("Error: \(error)")
+		}
 
 		window.contentView = mtkView
 		window.makeKeyAndOrderFront(nil)
@@ -128,7 +70,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, MTKViewDelegate {
 	}
 
 	func draw(in view: MTKView) {
-		guard let b = commandQueue.makeCommandBuffer(), let d = view.currentRenderPassDescriptor,
+		guard let b = commandQueue.makeCommandBuffer(),
+			let d = view.currentRenderPassDescriptor,
 			let e = b.makeRenderCommandEncoder(descriptor: d)
 		else { return }
 
@@ -139,7 +82,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, MTKViewDelegate {
 
 		e.setRenderPipelineState(pipelineState)
 		e.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.size, index: 0)
-		e.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)  // One big triangle covering screen
+		e.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
 
 		e.endEncoding()
 		b.present(view.currentDrawable!)
