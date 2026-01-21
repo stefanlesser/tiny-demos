@@ -8,7 +8,7 @@ echo ""
 
 # Step 1: Precompile Metal shader
 echo "1. Compiling Metal shader..."
-xcrun -sdk macosx metal Shaders.metal -o Shaders.metallib
+xcrun -sdk macosx metal Sources/Shaders.metal -o Shaders.metallib
 if [ $? -ne 0 ]; then
     echo "✗ Failed to compile Metal shader"
     exit 1
@@ -17,7 +17,7 @@ echo "✓ Metal shader compiled successfully"
 
 # Step 2: Compile Swift with embedded shader library
 echo "2. Compiling Swift executable with embedded shader..."
-swiftc main.swift -o MetalApp \
+swiftc Sources/64kDemo/main.swift -o MetalApp \
     -Osize -whole-module-optimization \
     -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __metallib -Xlinker Shaders.metallib \
     -Xlinker -dead_strip -Xlinker -x \
@@ -46,4 +46,3 @@ echo "Final binary details:"
 ls -la MetalApp*
 echo ""
 echo "✓ 64k demo built successfully with embedded shader library!"
-echo "Note: The compressed binary (MetalApp.gz) is ready for distribution."

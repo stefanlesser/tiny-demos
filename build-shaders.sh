@@ -6,19 +6,19 @@
 echo "Building Metal shaders..."
 
 # Compile the Metal shader
-xcrun -sdk macosx metal Shaders.metal -o Shaders.metallib
+xcrun -sdk macosx metal Sources/Shaders.metal -o Shaders.metallib
 
 if [ $? -eq 0 ]; then
     echo "✓ Metal shader compilation successful"
-    
+
     # Verify the file was created
     if [ -f "Shaders.metallib" ]; then
         echo "✓ Shaders.metallib created successfully"
-        
+
         # Rebuild the Swift package to include updated shader
         echo "Rebuilding Swift package..."
         swift build
-        
+
         if [ $? -eq 0 ]; then
             echo "✓ Swift package rebuilt successfully"
             echo "✓ Shader update complete!"
